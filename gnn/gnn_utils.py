@@ -34,6 +34,13 @@ def train_model(model, dataloaders, criterion, optimizer, use_gpu, print_iter=10
     global_step = 0  # ✅ FIX: unique step counter
 
     for epoch in range(num_epochs):
+        if isinstance(criterion, GRAPEMUSTPlanningLoss):
+            if epoch < 100:
+                criterion.set_entropy_weight(1e-3)
+            elif epoch < 200:
+                criterion.set_entropy_weight(1e-4)
+            else:
+                criterion.set_entropy_weight(0.0)
         if epoch % print_iter == 0:
             print(f'Epoch {epoch}/{num_epochs - 1}', flush=True)
             print('-' * 10, flush=True)
@@ -217,44 +224,43 @@ class GRAPEMUSTPlanningLoss(nn.Module):
     """
     Stabilized MUS-only loss for planning guidance.
 
-    Main changes vs the current repo version:
-    - multiple Monte Carlo samples (n_samples > 1)
-    - moving-average baseline for REINFORCE variance reduction
-    - entropy regularization to avoid premature collapse
-    - softer miss penalty instead of hard 0/1 jump
-    - probability clamping for numerical stability
+    Adds:
+    - deterministic validation
+    - separate train/eval sample counts
+    - entropy schedule support
+    - moving baseline
     """
 
     def __init__(
         self,
         n_samples=8,
+        eval_n_samples=16,
         miss_penalty_weight=2.0,
         size_penalty_weight=1.0,
         entropy_weight=1e-3,
         baseline_momentum=0.9,
         prob_eps=1e-4,
+        deterministic_eval=True,
+        threshold=0.5,
     ):
         super().__init__()
         self.n_samples = n_samples
+        self.eval_n_samples = eval_n_samples
         self.miss_penalty_weight = miss_penalty_weight
         self.size_penalty_weight = size_penalty_weight
         self.entropy_weight = entropy_weight
         self.baseline_momentum = baseline_momentum
         self.prob_eps = prob_eps
+        self.deterministic_eval = deterministic_eval
+        self.threshold = threshold
 
-        # Running baseline for REINFORCE variance reduction
         self.register_buffer("running_baseline", torch.tensor(0.0))
         self.register_buffer("baseline_initialized", torch.tensor(False))
 
-    def _per_graph_loss(self, y_g, t_g):
-        """
-        y_g: sampled keep mask, shape [num_nodes]
-        t_g: binary targets, shape [num_nodes]
+    def set_entropy_weight(self, value):
+        self.entropy_weight = float(value)
 
-        Softer loss:
-        - penalize fraction of positive nodes that were dropped
-        - penalize keeping too many nodes
-        """
+    def _per_graph_loss(self, y_g, t_g):
         y_g = y_g.float()
         t_g = t_g.float()
 
@@ -278,46 +284,56 @@ class GRAPEMUSTPlanningLoss(nn.Module):
         )
         return loss
 
+    def _split_by_graph(self, tensor, n_node):
+        sizes = [int(s) for s in n_node.view(-1).tolist()]
+        return torch.split(tensor, sizes)
+
     def forward(self, logits, targets, n_node=None):
-        """
-        logits:  [total_nodes, 1]
-        targets: [total_nodes, 1]
-        n_node:  [batch_size] nodes per graph
-        """
         probs = torch.sigmoid(logits).squeeze(-1)
         probs = probs.clamp(self.prob_eps, 1.0 - self.prob_eps)
-
         targets_flat = targets.squeeze(-1).float()
+
+        # Deterministic validation
+        if (not self.training) and self.deterministic_eval:
+            y = (probs > self.threshold).float()
+
+            if n_node is not None:
+                y_list = self._split_by_graph(y, n_node)
+                t_list = self._split_by_graph(targets_flat, n_node)
+                g_losses = torch.stack([
+                    self._per_graph_loss(y_g, t_g)
+                    for y_g, t_g in zip(y_list, t_list)
+                ])
+                return g_losses.mean()
+            else:
+                return self._per_graph_loss(y, targets_flat)
+
+        # Stochastic MUS training / optional stochastic eval
         dist = torch.distributions.Bernoulli(probs=probs)
+
+        num_samples = self.n_samples if self.training else self.eval_n_samples
 
         total_pg_loss = torch.zeros((), device=logits.device)
         total_entropy = torch.zeros((), device=logits.device)
         total_raw_loss = torch.zeros((), device=logits.device)
 
-        for _ in range(self.n_samples):
-            y = dist.sample()                 # [N]
-            log_probs = dist.log_prob(y)      # [N]
-            entropy = dist.entropy()          # [N]
+        for _ in range(num_samples):
+            y = dist.sample()
+            log_probs = dist.log_prob(y)
+            entropy = dist.entropy()
 
             if n_node is not None:
-                sizes = [int(s) for s in n_node.view(-1).tolist()]
-                y_list = torch.split(y, sizes)
-                t_list = torch.split(targets_flat, sizes)
-                lp_list = torch.split(log_probs, sizes)
-                ent_list = torch.split(entropy, sizes)
+                y_list = self._split_by_graph(y, n_node)
+                t_list = self._split_by_graph(targets_flat, n_node)
+                lp_list = self._split_by_graph(log_probs, n_node)
+                ent_list = self._split_by_graph(entropy, n_node)
 
                 g_losses = torch.stack([
                     self._per_graph_loss(y_g, t_g)
                     for y_g, t_g in zip(y_list, t_list)
-                ])  # [B]
-
-                g_log_probs = torch.stack([
-                    lp.sum() for lp in lp_list
-                ])  # [B]
-
-                g_entropies = torch.stack([
-                    ent.mean() for ent in ent_list
-                ])  # [B]
+                ])
+                g_log_probs = torch.stack([lp.sum() for lp in lp_list])
+                g_entropies = torch.stack([ent.mean() for ent in ent_list])
 
                 sample_raw_loss = g_losses.mean()
                 sample_pg_loss = (g_losses.detach() * g_log_probs).mean()
@@ -332,11 +348,10 @@ class GRAPEMUSTPlanningLoss(nn.Module):
             total_pg_loss = total_pg_loss + sample_pg_loss
             total_entropy = total_entropy + sample_entropy
 
-        avg_raw_loss = total_raw_loss / self.n_samples
-        avg_pg_loss = total_pg_loss / self.n_samples
-        avg_entropy = total_entropy / self.n_samples
+        avg_raw_loss = total_raw_loss / num_samples
+        avg_pg_loss = total_pg_loss / num_samples
+        avg_entropy = total_entropy / num_samples
 
-        # Update moving baseline only during training
         if self.training:
             with torch.no_grad():
                 if not self.baseline_initialized.item():
@@ -349,13 +364,8 @@ class GRAPEMUSTPlanningLoss(nn.Module):
 
         advantage = avg_raw_loss.detach() - self.running_baseline.detach()
 
-        # REINFORCE objective with baseline + entropy bonus
         loss = advantage * avg_pg_loss - self.entropy_weight * avg_entropy
-
-        # Add avg_raw_loss as a zero-gradient diagnostic anchor so logs stay meaningful
-        # without changing the policy-gradient direction.
         loss = loss + 0.0 * avg_raw_loss
-
         return loss
 
 

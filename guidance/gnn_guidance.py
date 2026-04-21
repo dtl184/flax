@@ -68,7 +68,7 @@ class GNNSearchGuidance(BaseSearchGuidance):
                                              valid_graphs_target)
         dataloader = DataLoader(
             graph_dataset,
-            batch_size=16,
+            batch_size=32,
             shuffle=True,
             num_workers=3,
             collate_fn=graph_batch_collate,
@@ -76,7 +76,7 @@ class GNNSearchGuidance(BaseSearchGuidance):
 
         dataloader_val = DataLoader(
             graph_dataset_val,
-            batch_size=16,
+            batch_size=32,
             shuffle=False,
             num_workers=3,
             collate_fn=graph_batch_collate,
@@ -86,19 +86,22 @@ class GNNSearchGuidance(BaseSearchGuidance):
         self._model = setup_graph_net(graph_dataset, use_gpu=False, num_steps=3)
 
         if not self._load_from_file or not os.path.exists(model_outfile):
-            optimizer = torch.optim.Adam(self._model.parameters(), lr=1e-4)
+            optimizer = torch.optim.Adam(self._model.parameters(), lr=5e-5)
             if self._criterion_name == "bce":
                 pos_weight = self._bce_pos_weight*torch.ones([1])
                 criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
             elif self._criterion_name == "grape-must":
-                    criterion = GRAPEMUSTPlanningLoss(
-                n_samples=8,
-                miss_penalty_weight=2.0,
-                size_penalty_weight=1.0,
-                entropy_weight=1e-3,
-                baseline_momentum=0.9,
-                prob_eps=1e-4,
-            )
+                criterion = GRAPEMUSTPlanningLoss(
+                    n_samples=8,
+                    eval_n_samples=16,
+                    miss_penalty_weight=2.0,
+                    size_penalty_weight=1.0,
+                    entropy_weight=1e-3,
+                    baseline_momentum=0.9,
+                    prob_eps=1e-4,
+                    deterministic_eval=True,
+                    threshold=0.5,
+                )
             else:
                 raise Exception("Unrecognized criterion_name {}".format(
                     self._criterion_name))
