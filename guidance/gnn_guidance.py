@@ -12,7 +12,7 @@ import pddlgym
 from pddlgym.structs import Predicate, LiteralConjunction
 from gnn.gnn import setup_graph_net
 from gnn.gnn_dataset import GraphDictDataset, graph_batch_collate
-from gnn.gnn_utils import train_model, get_single_model_prediction
+from gnn.gnn_utils import train_model, get_single_model_prediction, GRAPEMUSTPlanningLoss
 from guidance import BaseSearchGuidance
 from planning import PlanningTimeout, PlanningFailure
 
@@ -80,6 +80,8 @@ class GNNSearchGuidance(BaseSearchGuidance):
             if self._criterion_name == "bce":
                 pos_weight = self._bce_pos_weight*torch.ones([1])
                 criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            elif self._criterion_name == "grape-must":
+                criterion = GRAPEMUSTPlanningLoss()
             else:
                 raise Exception("Unrecognized criterion_name {}".format(
                     self._criterion_name))

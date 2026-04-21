@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import collections
+from torch.utils.tensorboard import SummaryWriter
 import time
 import copy
 import matplotlib.pyplot as plt
@@ -14,14 +15,16 @@ import networkx as nx
 import os
 
 
+
 def train_model(model, dataloaders, criterion, optimizer, use_gpu, print_iter=10, 
                 save_iter=50, save_folder='/tmp', num_epochs=1000, global_criterion=None,
                 return_last_model_weights=True):
-    """Optimize the model and save checkpoints
-    """
-    since = time.time()
+    """Optimize the model and save checkpoints with TensorBoard logging"""
 
-    best_seen_model_weights = None # as measured on validation loss
+    since = time.time()
+    writer = SummaryWriter(log_dir="runs/exp1")
+
+    best_seen_model_weights = None
     best_seen_running_validation_loss = np.inf
 
     if use_gpu:
@@ -31,88 +34,111 @@ def train_model(model, dataloaders, criterion, optimizer, use_gpu, print_iter=10
         if global_criterion is not None:
             global_criterion = global_criterion.cuda()
 
+    global_step = 0  # ✅ FIX: unique step counter
+
     for epoch in range(num_epochs):
         if epoch % print_iter == 0:
-            print('Epoch {}/{}'.format(epoch, num_epochs - 1), flush=True)
+            print(f'Epoch {epoch}/{num_epochs - 1}', flush=True)
             print('-' * 10, flush=True)
-        # Each epoch has a training and validation phase
-        if epoch % print_iter == 0:
-            phases = ['train','val']
-        else:
-            phases = ['train']
-        
-        running_loss = {'train':0.0,'val':0.0}
+
+        phases = ['train','val'] if epoch % print_iter == 0 else ['train']
+        running_loss = {'train': 0.0, 'val': 0.0}
 
         for phase in phases:
-            if phase == 'train':
-                model.train(True)  # Set model to training mode
-            else:
-                model.train(False)  # Set model to evaluate mode
+            model.train(phase == 'train')
 
-            # Iterate over data.
             for data in dataloaders[phase]:
                 inputs = data['graph_input']
                 targets = data['graph_target']
-                
+
                 if use_gpu:
-                    for key in inputs.keys():
+                    for key in inputs:
                         inputs[key] = inputs[key].cuda()
-                for key in targets.keys():
+
+                for key in targets:
                     if use_gpu:
                         targets[key] = targets[key].cuda()
                     if targets[key] is not None:
                         targets[key] = targets[key].detach()
 
-                # zero the parameter gradients
                 optimizer.zero_grad()
                 outputs = model(inputs.copy())
                 output = outputs[-1]
 
-                loss = 0.
+                loss = 0.0
+
                 if criterion is not None:
-                    loss += criterion(output['nodes'], targets['nodes'])
+                    if isinstance(criterion, GRAPEMUSTPlanningLoss):
+                        node_loss = criterion(output['nodes'], targets['nodes'], targets.get('n_node'))
+                    else:
+                        node_loss = criterion(output['nodes'], targets['nodes'])
+                    loss += node_loss
+                else:
+                    node_loss = torch.tensor(0.0)
 
                 if global_criterion is not None:
                     if isinstance(global_criterion, nn.CrossEntropyLoss):
                         global_loss = global_criterion(
                             output['globals'],
-                            targets['globals'].long().view(-1)) # assumes crossentropyloss
+                            targets['globals'].long().view(-1))
                     else:
                         global_loss = global_criterion(
                             output['globals'],
                             targets['globals'])
                     loss += global_loss
+                else:
+                    global_loss = torch.tensor(0.0)
 
-                # backward + optimize only if in training phase
                 if phase == 'train':
                     loss.backward()
                     optimizer.step()
 
-                # statistics
-                running_loss[phase] += loss.item()
+                loss_value = loss.item()
+
+                # ✅ normalize loss (better plots)
+                running_loss[phase] += loss_value / len(dataloaders[phase])
+
+                # ✅ FIX: log with global_step (not epoch!)
+                writer.add_scalar(f"{phase}/batch_loss", loss_value, global_step)
+
+                if criterion is not None:
+                    writer.add_scalar(f"{phase}/node_loss", node_loss.item(), global_step)
+
+                if global_criterion is not None:
+                    writer.add_scalar(f"{phase}/global_loss", global_loss.item(), global_step)
+
+                global_step += 1
 
         if epoch % print_iter == 0:
             print("running_loss:", running_loss, flush=True)
 
-        if epoch % save_iter == 0:
-            save_path = os.path.join(save_folder, "model" + str(epoch) + ".pt")
-            torch.save(model.state_dict(), save_path)
-            print("Saved model checkpoint {}".format(save_path))
+        # ✅ log per-epoch loss (clean curves)
+        writer.add_scalar("epoch/train_loss", running_loss['train'], epoch)
+        if 'val' in phases:
+            writer.add_scalar("epoch/val_loss", running_loss['val'], epoch)
 
-            if running_loss['val'] < best_seen_running_validation_loss:
+        if epoch % save_iter == 0:
+            save_path = os.path.join(save_folder, f"model{epoch}.pt")
+            torch.save(model.state_dict(), save_path)
+            print(f"Saved model checkpoint {save_path}")
+
+            if 'val' in phases and running_loss['val'] < best_seen_running_validation_loss:
                 best_seen_running_validation_loss = running_loss['val']
                 best_seen_model_weights = model.state_dict()
-                print("Found new best model with validation loss {} at epoch {}".format(
-                    best_seen_running_validation_loss, epoch), flush=True)
+                print(f"New best model (val loss={running_loss['val']}) at epoch {epoch}", flush=True)
 
     time_elapsed = time.time() - since
-    print('Training complete in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60), flush=True)
+    print(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s', flush=True)
+
+    writer.flush()   # ✅ ensure data is written
+    writer.close()
 
     if return_last_model_weights:
         return model.state_dict()
 
     return best_seen_model_weights
+
+
 
 def get_model_predictions(model, dataloader, use_gpu=False):
     """
@@ -187,6 +213,74 @@ def get_multi_model_predictions(model, inputs, use_gpu=False):
         graph['n_edge'] = graph['n_edge'].item()
         out.append(graph)
     return out
+
+
+class GRAPEMUSTPlanningLoss(nn.Module):
+    """Adaptation of GRAPE-MUST loss (Lymperopoulos & Liu, 2024, Eq. 4) to planning guidance.
+
+    Original MUS domain: penalizes pruned formulas that remain satisfiable (critical
+    clauses removed) with loss=1; otherwise loss=(|kept|/|total|)^2 to encourage pruning.
+
+    Planning adaptation:
+        - "satisfiable" → any positive-labeled object (solution object) is pruned
+        - "unsatisfiable" → all solution objects are retained
+
+    Per-graph loss:
+        1                          if any node with target=1 is pruned
+        (n_kept / n_total)^2       otherwise  (encourages pruning irrelevant nodes)
+
+    Non-differentiable due to discrete sampling, so optimized via REINFORCE
+    (score function estimator): gradient = loss_val.detach() * ∇ log p_θ(y).
+    """
+
+    def __init__(self, n_samples=1):
+        super().__init__()
+        self.n_samples = n_samples
+
+    def _per_graph_loss(self, y_g, t_g):
+        """Compute scalar loss for one graph's sampled keep-mask y_g and targets t_g."""
+        n_total = float(y_g.shape[0])
+        n_kept = y_g.sum()
+        missed_positive = ((t_g == 1) & (y_g == 0)).any()
+        if missed_positive:
+            return torch.ones(1, device=y_g.device).squeeze()
+        return (n_kept / n_total) ** 2
+
+    def forward(self, logits, targets, n_node=None):
+        """
+        logits:  [total_nodes, 1]  raw model outputs
+        targets: [total_nodes, 1]  binary labels (1=in solution, 0=not)
+        n_node:  [batch_size]      nodes per graph; treats full batch as one graph if None
+        """
+        mu = torch.sigmoid(logits).squeeze(-1)       # [N]
+        targets_flat = targets.squeeze(-1).float()    # [N]
+        dist = torch.distributions.Bernoulli(probs=mu)
+
+        total_loss = torch.zeros(1, device=logits.device).squeeze()
+
+        for _ in range(self.n_samples):
+            y = dist.sample()           # [N]  discrete {0, 1}
+            log_probs = dist.log_prob(y)  # [N]
+
+            if n_node is not None:
+                sizes = [int(s) for s in n_node.view(-1).tolist()]
+                y_list = torch.split(y, sizes)
+                t_list = torch.split(targets_flat, sizes)
+                lp_list = torch.split(log_probs, sizes)
+
+                g_losses = torch.stack([
+                    self._per_graph_loss(y_g, t_g)
+                    for y_g, t_g in zip(y_list, t_list)
+                ])                                        # [B]
+                g_log_probs = torch.stack([lp.sum() for lp in lp_list])  # [B]
+                sample_loss = (g_losses.detach() * g_log_probs).mean()
+            else:
+                loss_val = self._per_graph_loss(y, targets_flat)
+                sample_loss = loss_val.detach() * log_probs.sum()
+
+            total_loss = total_loss + sample_loss
+
+        return total_loss / self.n_samples
 
 
 # https://github.com/cimeister/pu-learning/blob/master/loss.py

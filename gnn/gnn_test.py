@@ -2,8 +2,9 @@
 """
 from gnn import setup_graph_net
 from gnn_dataset import GraphDictDataset, graph_batch_collate
-from gnn_utils import train_model, get_model_predictions, visualize_graphs, PULoss
+from gnn_utils import train_model, get_model_predictions, visualize_graphs, PULoss, GRAPEMUSTPlanningLoss
 from torch.utils.data import DataLoader
+
 import torch.optim as optim
 import torch.nn as nn
 import numpy as np
@@ -101,7 +102,7 @@ def run():
 
     model = setup_graph_net(graph_dataset, use_gpu=False, num_steps=3)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    criterion = PULoss(prior=0.25) # nn.BCEWithLogitsLoss()
+    criterion = GRAPEMUSTPlanningLoss()  # PULoss(prior=0.25) or nn.BCEWithLogitsLoss()
     model_weights = train_model(model, dataloaders, criterion=criterion, optimizer=optimizer, use_gpu=False, num_epochs=200)
     model.load_state_dict(model_weights)
 
