@@ -98,110 +98,105 @@ Epoch 300/300
 ----------
 running_loss: {'train': -59.47062475031071, 'val': -55.09001541137695}"""
 
-log_text2 = """
-Epoch 0/300
+log_text2 = """Epoch 0/300
 ----------
-running_loss: {'train': 1.1073680303313513, 'val': 0.9746958315372467}
+running_loss: {'train': 0.06560808747731628, 'val': -4.1547814309597015}
 Saved model checkpoint /tmp/model0.pt
-New best model (val loss=0.9746958315372467) at epoch 0
+New best model (val loss=-4.1547814309597015) at epoch 0
 Epoch 10/300
 ----------
-running_loss: {'train': 0.6356151429089634, 'val': 0.6135304272174835}
+running_loss: {'train': 1.7663583728400147, 'val': -1.6649432480335236}
 Epoch 20/300
 ----------
-running_loss: {'train': 0.6044063622301273, 'val': 0.5806695222854614}
+running_loss: {'train': 0.6180156686089255, 'val': 3.2801782488822937}
 Epoch 30/300
 ----------
-running_loss: {'train': 0.565069550817663, 'val': 0.563374787569046}
+running_loss: {'train': 1.278105613860217, 'val': -2.67276394367218}
 Epoch 40/300
 ----------
-running_loss: {'train': 0.5462134886871685, 'val': 0.5562227964401245}
+running_loss: {'train': 0.1668122949248011, 'val': -0.24883460998535156}
 Epoch 50/300
 ----------
-running_loss: {'train': 0.5428041382269427, 'val': 0.5422726273536682}
+running_loss: {'train': 0.050674273949963156, 'val': -3.1328604164300486}
 Saved model checkpoint /tmp/model50.pt
-New best model (val loss=0.5422726273536682) at epoch 50
 Epoch 60/300
 ----------
-running_loss: {'train': 0.5338907512751492, 'val': 0.5486455261707306}
+running_loss: {'train': 0.7149200629104266, 'val': -1.6781886965036392}
 Epoch 70/300
 ----------
-running_loss: {'train': 0.5338320461186494, 'val': 0.5375697612762451}
+running_loss: {'train': 0.49065192653374234, 'val': 0.7695013009943068}
 Epoch 80/300
 ----------
-running_loss: {'train': 0.5278563391078602, 'val': 0.5370552241802216}
+running_loss: {'train': 0.429267109033059, 'val': 0.40112441778182983}
 Epoch 90/300
 ----------
-running_loss: {'train': 0.5437717762860386, 'val': 0.5615746676921844}
+running_loss: {'train': -0.09019660136916427, 'val': 1.8236235734075308}
 Epoch 100/300
 ----------
-running_loss: {'train': 0.5234545550563119, 'val': 0.5300788283348083}
+running_loss: {'train': -0.015531263568184586, 'val': -1.0071228742599487}
 Saved model checkpoint /tmp/model100.pt
-New best model (val loss=0.5300788283348083) at epoch 100
 Epoch 110/300
 ----------
-running_loss: {'train': 0.5230836814100093, 'val': 0.5239729285240173}
+running_loss: {'train': -0.10981709713285621, 'val': 0.8484239131212234}
 Epoch 120/300
 ----------
-running_loss: {'train': 0.5225043947046454, 'val': 0.5242983400821686}
+running_loss: {'train': 0.04746800119226628, 'val': 2.0067050755023956}
 Epoch 130/300
 ----------
-running_loss: {'train': 0.5159729692068966, 'val': 0.5211068242788315}
+running_loss: {'train': -0.000541167503053476, 'val': 1.2070828080177307}
 Epoch 140/300
 ----------
-running_loss: {'train': 0.5146747014739297, 'val': 0.5209836810827255}
+running_loss: {'train': 0.3328722319142384, 'val': 0.8417288661003113}
 Epoch 150/300
 ----------
-running_loss: {'train': 0.5183245675130325, 'val': 0.527680516242981}
+running_loss: {'train': 0.1676827648823912, 'val': 1.7874498963356018}
 Saved model checkpoint /tmp/model150.pt
-New best model (val loss=0.527680516242981) at epoch 150
 Epoch 160/300
 ----------
-running_loss: {'train': 0.5262904952872883, 'val': 0.5591558516025543}
+running_loss: {'train': -0.08897255767475476, 'val': 1.7251981794834137}
 Epoch 170/300
 ----------
-running_loss: {'train': 0.5249419862573798, 'val': 0.5228519290685654}
+running_loss: {'train': -0.8349479545246472, 'val': -0.21842828392982483}
 Epoch 180/300
 ----------
-running_loss: {'train': 0.5942170511592518, 'val': 0.5771166682243347}
+running_loss: {'train': 0.24483753469857306, 'val': 0.9898810833692551}
 Epoch 190/300
 ----------
-running_loss: {'train': 0.5503397150473162, 'val': 0.5835314095020294}
+running_loss: {'train': 0.10773595896634189, 'val': -1.369838833808899}
 Epoch 200/300
 ----------
-running_loss: {'train': 0.5276886983351273, 'val': 0.5503818392753601}
+running_loss: {'train': -0.19940235931426287, 'val': 0.8921376690268517}
 Saved model checkpoint /tmp/model200.pt
 Epoch 210/300
 ----------
-running_loss: {'train': 0.5214472873644396, 'val': 0.5469220876693726}
+running_loss: {'train': 0.7760638770732012, 'val': -0.7034215331077576}
 Epoch 220/300
 ----------
-running_loss: {'train': 0.513810174031691, 'val': 0.5353141129016876}
+running_loss: {'train': 0.689920276403427, 'val': 1.741388514637947}
 Epoch 230/300
 ----------
-running_loss: {'train': 0.5084676769646731, 'val': 0.5327062606811523}
+running_loss: {'train': 0.507363037629561, 'val': 1.693995475769043}
 Epoch 240/300
 ----------
-running_loss: {'train': 0.5019866309382699, 'val': 0.5287696570158005}
+running_loss: {'train': -0.39158101312138816, 'val': -0.10246235132217407}
 Epoch 250/300
 ----------
-running_loss: {'train': 0.5049501115625554, 'val': 0.5374244898557663}
+running_loss: {'train': 0.3735533586957238, 'val': 1.4704844951629639}
 Saved model checkpoint /tmp/model250.pt
 Epoch 260/300
 ----------
-running_loss: {'train': 0.49906993725083093, 'val': 0.5405613481998444}
+running_loss: {'train': 0.2064120772887359, 'val': 0.6078111976385117}
 Epoch 270/300
 ----------
-running_loss: {'train': 0.49380003864114935, 'val': 0.5049603134393692}
+running_loss: {'train': 0.12441147728399787, 'val': 0.6374816000461578}
 Epoch 280/300
 ----------
-running_loss: {'train': 0.5032140233299949, 'val': 0.5255872160196304}
+running_loss: {'train': 0.2935075905936008, 'val': -0.17739873751997948}
 Epoch 290/300
 ----------
-running_loss: {'train': 0.4960990927436135, 'val': 0.5281639844179153}
+running_loss: {'train': -0.5235744481271302, 'val': 2.179424226284027}
 Epoch 300/300
 ----------
-running_loss: {'train': 0.48892349546605895, 'val': 0.5247691720724106}
 """
 
 # Regex patterns
@@ -213,8 +208,8 @@ train_losses = []
 val_losses = []
 
 # Extract data
-epoch_matches = re.findall(epoch_pattern, log_text)
-loss_matches = re.findall(loss_pattern, log_text)
+epoch_matches = re.findall(epoch_pattern, log_text2)
+loss_matches = re.findall(loss_pattern, log_text2)
 
 for e, (train, val) in zip(epoch_matches, loss_matches):
     epochs.append(int(e))
@@ -233,6 +228,6 @@ plt.legend()
 plt.grid(True)
 
 plt.tight_layout()
-plt.savefig("loss_plot_mus.png")
+plt.savefig("loss_plot_mus_new.png")
 
 

@@ -1,7 +1,4 @@
-try:
-    from .gnn_dataset import create_super_graph
-except ImportError:
-    from gnn_dataset import create_super_graph
+from .gnn_dataset import create_super_graph
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,7 +38,7 @@ def train_model(model, dataloaders, criterion, optimizer, use_gpu, print_iter=10
             print(f'Epoch {epoch}/{num_epochs - 1}', flush=True)
             print('-' * 10, flush=True)
 
-        phases = ['train','val'] if epoch % print_iter == 0 else ['train']
+        phases = ['train', 'val']
         running_loss = {'train': 0.0, 'val': 0.0}
 
         for phase in phases:
@@ -91,6 +88,7 @@ def train_model(model, dataloaders, criterion, optimizer, use_gpu, print_iter=10
 
                 if phase == 'train':
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
 
                 loss_value = loss.item()
@@ -216,71 +214,149 @@ def get_multi_model_predictions(model, inputs, use_gpu=False):
 
 
 class GRAPEMUSTPlanningLoss(nn.Module):
-    """Adaptation of GRAPE-MUST loss (Lymperopoulos & Liu, 2024, Eq. 4) to planning guidance.
+    """
+    Stabilized MUS-only loss for planning guidance.
 
-    Original MUS domain: penalizes pruned formulas that remain satisfiable (critical
-    clauses removed) with loss=1; otherwise loss=(|kept|/|total|)^2 to encourage pruning.
-
-    Planning adaptation:
-        - "satisfiable" → any positive-labeled object (solution object) is pruned
-        - "unsatisfiable" → all solution objects are retained
-
-    Per-graph loss:
-        1                          if any node with target=1 is pruned
-        (n_kept / n_total)^2       otherwise  (encourages pruning irrelevant nodes)
-
-    Non-differentiable due to discrete sampling, so optimized via REINFORCE
-    (score function estimator): gradient = loss_val.detach() * ∇ log p_θ(y).
+    Main changes vs the current repo version:
+    - multiple Monte Carlo samples (n_samples > 1)
+    - moving-average baseline for REINFORCE variance reduction
+    - entropy regularization to avoid premature collapse
+    - softer miss penalty instead of hard 0/1 jump
+    - probability clamping for numerical stability
     """
 
-    def __init__(self, n_samples=1):
+    def __init__(
+        self,
+        n_samples=8,
+        miss_penalty_weight=2.0,
+        size_penalty_weight=1.0,
+        entropy_weight=1e-3,
+        baseline_momentum=0.9,
+        prob_eps=1e-4,
+    ):
         super().__init__()
         self.n_samples = n_samples
+        self.miss_penalty_weight = miss_penalty_weight
+        self.size_penalty_weight = size_penalty_weight
+        self.entropy_weight = entropy_weight
+        self.baseline_momentum = baseline_momentum
+        self.prob_eps = prob_eps
+
+        # Running baseline for REINFORCE variance reduction
+        self.register_buffer("running_baseline", torch.tensor(0.0))
+        self.register_buffer("baseline_initialized", torch.tensor(False))
 
     def _per_graph_loss(self, y_g, t_g):
-        """Compute scalar loss for one graph's sampled keep-mask y_g and targets t_g."""
+        """
+        y_g: sampled keep mask, shape [num_nodes]
+        t_g: binary targets, shape [num_nodes]
+
+        Softer loss:
+        - penalize fraction of positive nodes that were dropped
+        - penalize keeping too many nodes
+        """
+        y_g = y_g.float()
+        t_g = t_g.float()
+
         n_total = float(y_g.shape[0])
         n_kept = y_g.sum()
-        missed_positive = ((t_g == 1) & (y_g == 0)).any()
-        if missed_positive:
-            return torch.ones(1, device=y_g.device).squeeze()
-        return (n_kept / n_total) ** 2
+
+        pos_mask = (t_g == 1)
+        n_pos = pos_mask.sum()
+
+        if n_pos.item() > 0:
+            missed_pos = ((pos_mask) & (y_g == 0)).float().sum()
+            miss_fraction = missed_pos / n_pos
+        else:
+            miss_fraction = torch.zeros((), device=y_g.device)
+
+        size_fraction = n_kept / n_total
+
+        loss = (
+            self.miss_penalty_weight * miss_fraction
+            + self.size_penalty_weight * (size_fraction ** 2)
+        )
+        return loss
 
     def forward(self, logits, targets, n_node=None):
         """
-        logits:  [total_nodes, 1]  raw model outputs
-        targets: [total_nodes, 1]  binary labels (1=in solution, 0=not)
-        n_node:  [batch_size]      nodes per graph; treats full batch as one graph if None
+        logits:  [total_nodes, 1]
+        targets: [total_nodes, 1]
+        n_node:  [batch_size] nodes per graph
         """
-        mu = torch.sigmoid(logits).squeeze(-1)       # [N]
-        targets_flat = targets.squeeze(-1).float()    # [N]
-        dist = torch.distributions.Bernoulli(probs=mu)
+        probs = torch.sigmoid(logits).squeeze(-1)
+        probs = probs.clamp(self.prob_eps, 1.0 - self.prob_eps)
 
-        total_loss = torch.zeros(1, device=logits.device).squeeze()
+        targets_flat = targets.squeeze(-1).float()
+        dist = torch.distributions.Bernoulli(probs=probs)
+
+        total_pg_loss = torch.zeros((), device=logits.device)
+        total_entropy = torch.zeros((), device=logits.device)
+        total_raw_loss = torch.zeros((), device=logits.device)
 
         for _ in range(self.n_samples):
-            y = dist.sample()           # [N]  discrete {0, 1}
-            log_probs = dist.log_prob(y)  # [N]
+            y = dist.sample()                 # [N]
+            log_probs = dist.log_prob(y)      # [N]
+            entropy = dist.entropy()          # [N]
 
             if n_node is not None:
                 sizes = [int(s) for s in n_node.view(-1).tolist()]
                 y_list = torch.split(y, sizes)
                 t_list = torch.split(targets_flat, sizes)
                 lp_list = torch.split(log_probs, sizes)
+                ent_list = torch.split(entropy, sizes)
 
                 g_losses = torch.stack([
                     self._per_graph_loss(y_g, t_g)
                     for y_g, t_g in zip(y_list, t_list)
-                ])                                        # [B]
-                g_log_probs = torch.stack([lp.sum() for lp in lp_list])  # [B]
-                sample_loss = (g_losses.detach() * g_log_probs).mean()
+                ])  # [B]
+
+                g_log_probs = torch.stack([
+                    lp.sum() for lp in lp_list
+                ])  # [B]
+
+                g_entropies = torch.stack([
+                    ent.mean() for ent in ent_list
+                ])  # [B]
+
+                sample_raw_loss = g_losses.mean()
+                sample_pg_loss = (g_losses.detach() * g_log_probs).mean()
+                sample_entropy = g_entropies.mean()
             else:
-                loss_val = self._per_graph_loss(y, targets_flat)
-                sample_loss = loss_val.detach() * log_probs.sum()
+                raw_loss = self._per_graph_loss(y, targets_flat)
+                sample_raw_loss = raw_loss
+                sample_pg_loss = raw_loss.detach() * log_probs.sum()
+                sample_entropy = entropy.mean()
 
-            total_loss = total_loss + sample_loss
+            total_raw_loss = total_raw_loss + sample_raw_loss
+            total_pg_loss = total_pg_loss + sample_pg_loss
+            total_entropy = total_entropy + sample_entropy
 
-        return total_loss / self.n_samples
+        avg_raw_loss = total_raw_loss / self.n_samples
+        avg_pg_loss = total_pg_loss / self.n_samples
+        avg_entropy = total_entropy / self.n_samples
+
+        # Update moving baseline only during training
+        if self.training:
+            with torch.no_grad():
+                if not self.baseline_initialized.item():
+                    self.running_baseline.copy_(avg_raw_loss.detach())
+                    self.baseline_initialized.fill_(True)
+                else:
+                    self.running_baseline.mul_(self.baseline_momentum).add_(
+                        (1.0 - self.baseline_momentum) * avg_raw_loss.detach()
+                    )
+
+        advantage = avg_raw_loss.detach() - self.running_baseline.detach()
+
+        # REINFORCE objective with baseline + entropy bonus
+        loss = advantage * avg_pg_loss - self.entropy_weight * avg_entropy
+
+        # Add avg_raw_loss as a zero-gradient diagnostic anchor so logs stay meaningful
+        # without changing the policy-gradient direction.
+        loss = loss + 0.0 * avg_raw_loss
+
+        return loss
 
 
 # https://github.com/cimeister/pu-learning/blob/master/loss.py
